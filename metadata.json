@@ -1,0 +1,6 @@
+{
+  "name": "Catatan Keuangan",
+  "description": "Aplikasi Pencatatan Keuangan Pribadi yang langsung terhubung dengan Google Spreadsheet.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
