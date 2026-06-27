@@ -9,6 +9,7 @@ import com.example.data.model.BudgetEntity
 import com.example.data.model.RecurringEntity
 import com.example.data.model.TransactionEntity
 import com.example.data.repository.FinanceRepository
+import com.example.data.remote.GoogleSheetsService
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -17,7 +18,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     private val database = AppDatabase.getDatabase(application)
     private val repository = FinanceRepository(database.transactionDao())
-    private val preferencesManager = PreferencesManager(application)
+    val preferencesManager = PreferencesManager(application)
+    val googleSheetsService = GoogleSheetsService(application, preferencesManager)
 
     // Current month & year filter
     private val _currentMonth = MutableStateFlow(Calendar.getInstance().get(Calendar.MONTH)) // 0-11
@@ -28,6 +30,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     // Settings flows
     val spreadsheetUrl: StateFlow<String> = preferencesManager.spreadsheetUrlFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val spreadsheetId: StateFlow<String> = preferencesManager.spreadsheetIdFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     val syncMode: StateFlow<String> = preferencesManager.syncModeFlow
@@ -41,6 +46,16 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     val isDarkTheme: StateFlow<Boolean> = preferencesManager.isDarkThemeFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    // OAuth2 Config flows
+    val oauthClientId: StateFlow<String> = preferencesManager.oauthClientIdFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val oauthClientSecret: StateFlow<String> = preferencesManager.oauthClientSecretFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    private val _isAuthorized = MutableStateFlow(false)
+    val isAuthorized: StateFlow<Boolean> = _isAuthorized.asStateFlow()
 
     // Raw transactions, budgets, recurring
     val allTransactions: StateFlow<List<TransactionEntity>> = repository.allTransactions
@@ -67,6 +82,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val syncMessage: StateFlow<String> = _syncMessage.asStateFlow()
 
     init {
+        // Check OAuth Authorized status
+        viewModelScope.launch {
+            _isAuthorized.value = googleSheetsService.isAuthorized()
+        }
+        
         // Seed initial mock data if database is empty so user gets a fully functional and rich experience immediately
         viewModelScope.launch {
             repository.allTransactions.first().let { list ->
@@ -229,22 +249,89 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _syncStatus.value = "Sinkronisasi..."
             _syncMessage.value = "Menghubungkan ke Google Spreadsheet..."
-            val url = spreadsheetUrl.value
-            if (url.isEmpty()) {
-                _syncStatus.value = "Gagal"
-                _syncMessage.value = "Masukkan URL Google Apps Script di Pengaturan terlebih dahulu."
-                return@launch
-            }
+            
+            val mode = syncMode.value
+            if (mode == "SheetsAPI") {
+                val sId = spreadsheetId.value
+                if (sId.isEmpty()) {
+                    _syncStatus.value = "Gagal"
+                    _syncMessage.value = "Masukkan Google Spreadsheet ID di Pengaturan terlebih dahulu."
+                    return@launch
+                }
+                
+                val result = repository.syncWithGoogleSheetsAPI(sId, googleSheetsService)
+                if (result.isSuccess) {
+                    _syncStatus.value = "Selesai"
+                    _syncMessage.value = result.getOrNull() ?: "Berhasil sinkronisasi!"
+                    preferencesManager.saveLastSyncTime(System.currentTimeMillis())
+                } else {
+                    _syncStatus.value = "Gagal"
+                    _syncMessage.value = result.exceptionOrNull()?.message ?: "Gagal terhubung dengan Spreadsheet."
+                }
+            } else {
+                val url = spreadsheetUrl.value
+                if (url.isEmpty()) {
+                    _syncStatus.value = "Gagal"
+                    _syncMessage.value = "Masukkan URL Google Apps Script di Pengaturan terlebih dahulu."
+                    return@launch
+                }
 
-            val result = repository.syncWithGoogleSheets(url)
+                val result = repository.syncWithGoogleSheets(url)
+                if (result.isSuccess) {
+                    _syncStatus.value = "Selesai"
+                    _syncMessage.value = result.getOrNull() ?: "Berhasil sinkronisasi!"
+                    preferencesManager.saveLastSyncTime(System.currentTimeMillis())
+                } else {
+                    _syncStatus.value = "Gagal"
+                    _syncMessage.value = result.exceptionOrNull()?.message ?: "Gagal terhubung dengan Spreadsheet."
+                }
+            }
+        }
+    }
+
+    fun saveSpreadsheetId(id: String) {
+        viewModelScope.launch {
+            preferencesManager.saveSpreadsheetId(id)
+        }
+    }
+
+    fun saveSyncMode(mode: String) {
+        viewModelScope.launch {
+            preferencesManager.saveSyncMode(mode)
+        }
+    }
+
+    fun saveOAuthCredentials(clientId: String, clientSecret: String) {
+        viewModelScope.launch {
+            preferencesManager.saveOAuthCredentials(clientId, clientSecret)
+        }
+    }
+
+    fun exchangeCodeForToken(clientId: String, clientSecret: String, code: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            _syncStatus.value = "Menghubungkan..."
+            _syncMessage.value = "Menukarkan kode otorisasi dengan token akses..."
+            val result = googleSheetsService.exchangeCodeForToken(clientId, clientSecret, code)
             if (result.isSuccess) {
+                _isAuthorized.value = true
                 _syncStatus.value = "Selesai"
-                _syncMessage.value = result.getOrNull() ?: "Berhasil sinkronisasi!"
-                preferencesManager.saveLastSyncTime(System.currentTimeMillis())
+                _syncMessage.value = "Koneksi Google Sheets Berhasil!"
+                onResult(true, "Berhasil menghubungkan Google Sheets!")
             } else {
                 _syncStatus.value = "Gagal"
-                _syncMessage.value = result.exceptionOrNull()?.message ?: "Gagal terhubung dengan Spreadsheet."
+                val errorMsg = result.exceptionOrNull()?.message ?: "Gagal menukarkan token."
+                _syncMessage.value = errorMsg
+                onResult(false, errorMsg)
             }
+        }
+    }
+
+    fun disconnectSheetsAPI() {
+        viewModelScope.launch {
+            preferencesManager.clearOAuthTokens()
+            _isAuthorized.value = false
+            _syncStatus.value = "Selesai"
+            _syncMessage.value = "Google Sheets terputus."
         }
     }
 

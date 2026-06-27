@@ -5,6 +5,7 @@ import com.example.data.local.TransactionDao
 import com.example.data.model.BudgetEntity
 import com.example.data.model.RecurringEntity
 import com.example.data.model.TransactionEntity
+import com.example.data.remote.GoogleSheetsService
 import com.example.data.remote.RetrofitClient
 import com.example.data.remote.SyncRequest
 import com.example.data.remote.SyncTransactionDto
@@ -112,6 +113,56 @@ class FinanceRepository(private val dao: TransactionDao) {
             }
         } catch (e: Exception) {
             Log.e("FinanceRepository", "Sync failed", e)
+            return Result.failure(e)
+        }
+    }
+
+    /**
+     * Bi-directional synchronization using Google Sheets API (OAuth2)
+     */
+    suspend fun syncWithGoogleSheetsAPI(spreadsheetId: String, service: GoogleSheetsService): Result<String> {
+        if (spreadsheetId.isEmpty()) {
+            return Result.failure(Exception("Spreadsheet ID belum diatur di Pengaturan"))
+        }
+
+        try {
+            // 1. Initialize spreadsheet headers if needed
+            val initRes = service.initializeSpreadsheet(spreadsheetId)
+            if (initRes.isFailure) {
+                return Result.failure(initRes.exceptionOrNull() ?: Exception("Gagal menginisialisasi spreadsheet"))
+            }
+
+            // 2. Fetch remote transactions from Google Sheets API
+            val remoteRes = service.readTransactions(spreadsheetId)
+            if (remoteRes.isFailure) {
+                return Result.failure(remoteRes.exceptionOrNull() ?: Exception("Gagal membaca dari spreadsheet"))
+            }
+            val remoteTransactions = remoteRes.getOrDefault(emptyList())
+
+            // 3. Get unsynced local transactions
+            val unsyncedLocal = dao.getUnsyncedTransactions()
+
+            // 4. Send unsynced local transactions to Google Sheets
+            if (unsyncedLocal.isNotEmpty()) {
+                val appendRes = service.appendTransactions(spreadsheetId, unsyncedLocal)
+                if (appendRes.isFailure) {
+                    return Result.failure(appendRes.exceptionOrNull() ?: Exception("Gagal mengunggah transaksi baru"))
+                }
+                
+                // Mark locally unsynced transactions as synced
+                val ids = unsyncedLocal.map { it.id }
+                dao.markAsSynced(ids)
+            }
+
+            // 5. Merge remote transactions that do not exist locally into the local DB
+            if (remoteTransactions.isNotEmpty()) {
+                dao.insertTransactions(remoteTransactions)
+            }
+
+            val totalUpdated = unsyncedLocal.size + remoteTransactions.size
+            return Result.success("Sinkronisasi Sheets API Berhasil! $totalUpdated transaksi disinkronkan.")
+        } catch (e: Exception) {
+            Log.e("FinanceRepository", "Sheets API Sync failed", e)
             return Result.failure(e)
         }
     }

@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -35,13 +36,24 @@ fun SettingScreen(
     modifier: Modifier = Modifier
 ) {
     val spreadsheetUrl by viewModel.spreadsheetUrl.collectAsState()
+    val spreadsheetId by viewModel.spreadsheetId.collectAsState()
+    val syncMode by viewModel.syncMode.collectAsState()
     val initialBalance by viewModel.initialBalance.collectAsState()
     val isDarkTheme by viewModel.isDarkTheme.collectAsState()
+    val oauthClientId by viewModel.oauthClientId.collectAsState()
+    val oauthClientSecret by viewModel.oauthClientSecret.collectAsState()
+    val isAuthorized by viewModel.isAuthorized.collectAsState()
 
     var urlInput by remember(spreadsheetUrl) { mutableStateOf(spreadsheetUrl) }
+    var spreadsheetIdInput by remember(spreadsheetId) { mutableStateOf(spreadsheetId) }
     var balanceInput by remember(initialBalance) { mutableStateOf(initialBalance.toInt().toString()) }
+    
+    var clientIdInput by remember(oauthClientId) { mutableStateOf(oauthClientId) }
+    var clientSecretInput by remember(oauthClientSecret) { mutableStateOf(oauthClientSecret) }
+    var authCodeInput by remember { mutableStateOf("") }
 
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
 
     val appsScriptCode = """
 function doPost(e) {
@@ -127,7 +139,54 @@ function doPost(e) {
             )
         }
 
-        // 2. FORM CONFIGS
+        // 2. SYNC MODE TABS (Apps Script vs Direct Sheets API)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        "Metode Sinkronisasi",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.saveSyncMode("AppsScript") },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (syncMode == "AppsScript") TealPrimary else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.CloudQueue, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Apps Script", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { viewModel.saveSyncMode("SheetsAPI") },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (syncMode == "SheetsAPI") TealPrimary else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.TableChart, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Sheets API", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. CONFIGURATION FOR SELECTED SYNC MODE
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
@@ -135,32 +194,162 @@ function doPost(e) {
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Konfigurasi Spreadsheet",
+                        if (syncMode == "SheetsAPI") "Konfigurasi Google Sheets API" else "Konfigurasi Apps Script",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
 
-                    // URL Input Field
-                    OutlinedTextField(
-                        value = urlInput,
-                        onValueChange = { urlInput = it },
-                        label = { Text("URL Google Apps Script Web App") },
-                        placeholder = { Text("https://script.google.com/macros/s/.../exec") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("spreadsheet_url_input"),
-                        trailingIcon = {
-                            if (urlInput.isNotEmpty()) {
-                                IconButton(onClick = { urlInput = "" }) {
-                                    Icon(Icons.Default.Clear, "Clear")
+                    if (syncMode == "AppsScript") {
+                        // URL Input Field for Apps Script mode
+                        OutlinedTextField(
+                            value = urlInput,
+                            onValueChange = { urlInput = it },
+                            label = { Text("URL Google Apps Script Web App") },
+                            placeholder = { Text("https://script.google.com/macros/s/.../exec") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("spreadsheet_url_input"),
+                            trailingIcon = {
+                                if (urlInput.isNotEmpty()) {
+                                    IconButton(onClick = { urlInput = "" }) {
+                                        Icon(Icons.Default.Clear, "Clear")
+                                    }
                                 }
                             }
-                        }
-                    )
+                        )
+                    } else {
+                        // Spreadsheet ID and OAuth inputs for Google Sheets API mode
+                        OutlinedTextField(
+                            value = spreadsheetIdInput,
+                            onValueChange = { spreadsheetIdInput = it },
+                            label = { Text("Google Spreadsheet ID") },
+                            placeholder = { Text("1a2b3c4d5e...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = {
+                                if (spreadsheetIdInput.isNotEmpty()) {
+                                    IconButton(onClick = { spreadsheetIdInput = "" }) {
+                                        Icon(Icons.Default.Clear, "Clear")
+                                    }
+                                }
+                            }
+                        )
 
-                    // Starting Balance Config
+                        OutlinedTextField(
+                            value = clientIdInput,
+                            onValueChange = { clientIdInput = it },
+                            label = { Text("OAuth Client ID") },
+                            placeholder = { Text("Enter Google Client ID") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        OutlinedTextField(
+                            value = clientSecretInput,
+                            onValueChange = { clientSecretInput = it },
+                            label = { Text("OAuth Client Secret") },
+                            placeholder = { Text("Enter Google Client Secret") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // OAuth Status Indicator & Actions
+                        Divider(modifier = Modifier.padding(vertical = 4.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Status Otorisasi:",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isAuthorized) MintGreen else Color.Red)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isAuthorized) "Terhubung" else "Belum Terhubung",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isAuthorized) MintGreen else Color.Red
+                                )
+                            }
+                        }
+
+                        if (!isAuthorized) {
+                            // Step to request authorization code
+                            Button(
+                                onClick = {
+                                    if (clientIdInput.isEmpty()) {
+                                        Toast.makeText(context, "Harap masukkan OAuth Client ID terlebih dahulu", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
+                                    viewModel.saveOAuthCredentials(clientIdInput, clientSecretInput)
+                                    val authUrl = viewModel.googleSheetsService.getAuthorizationUrl(clientIdInput)
+                                    uriHandler.openUri(authUrl)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = IncomeGreen)
+                            ) {
+                                Icon(Icons.Default.OpenInBrowser, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Buka Otorisasi Google", fontWeight = FontWeight.Bold)
+                            }
+
+                            // Step to enter auth code
+                            OutlinedTextField(
+                                value = authCodeInput,
+                                onValueChange = { authCodeInput = it },
+                                label = { Text("Kode Otorisasi (Paste di sini)") },
+                                placeholder = { Text("4/1AX4Xf...") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Button(
+                                onClick = {
+                                    if (clientIdInput.isEmpty() || clientSecretInput.isEmpty() || authCodeInput.isEmpty()) {
+                                        Toast.makeText(context, "Harap isi Client ID, Secret, dan Kode Otorisasi", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
+                                    viewModel.exchangeCodeForToken(clientIdInput, clientSecretInput, authCodeInput) { success, msg ->
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = TealPrimary)
+                            ) {
+                                Icon(Icons.Default.Link, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Selesaikan Koneksi", fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            // Option to disconnect
+                            Button(
+                                onClick = {
+                                    viewModel.disconnectSheetsAPI()
+                                    Toast.makeText(context, "Berhasil memutuskan Google Sheets API", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = ExpenseRed)
+                            ) {
+                                Icon(Icons.Default.LinkOff, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Putuskan Koneksi", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    // Starting Balance Config (Common Settings)
                     OutlinedTextField(
                         value = balanceInput,
                         onValueChange = { if (it.all { c -> c.isDigit() }) balanceInput = it },
@@ -192,7 +381,12 @@ function doPost(e) {
                     // Save settings button
                     Button(
                         onClick = {
-                            viewModel.saveSpreadsheetUrl(urlInput)
+                            if (syncMode == "AppsScript") {
+                                viewModel.saveSpreadsheetUrl(urlInput)
+                            } else {
+                                viewModel.saveSpreadsheetId(spreadsheetIdInput)
+                                viewModel.saveOAuthCredentials(clientIdInput, clientSecretInput)
+                            }
                             val bal = balanceInput.toDoubleOrNull() ?: 0.0
                             viewModel.saveInitialBalance(bal)
                             Toast.makeText(context, "Pengaturan berhasil disimpan!", Toast.LENGTH_SHORT).show()

@@ -23,6 +23,13 @@ class PreferencesManager(private val context: Context) {
         val LAST_SYNC_TIME = longPreferencesKey("last_sync_time")
         val INITIAL_BALANCE = doublePreferencesKey("initial_balance")
         val IS_DARK_THEME = booleanPreferencesKey("is_dark_theme")
+        
+        // OAuth2 Storage Keys
+        val OAUTH_CLIENT_ID = stringPreferencesKey("oauth_client_id")
+        val OAUTH_CLIENT_SECRET = stringPreferencesKey("oauth_client_secret")
+        val OAUTH_ACCESS_TOKEN = stringPreferencesKey("oauth_access_token")
+        val OAUTH_REFRESH_TOKEN = stringPreferencesKey("oauth_refresh_token")
+        val OAUTH_TOKEN_EXPIRY = longPreferencesKey("oauth_token_expiry")
     }
 
     val spreadsheetUrlFlow: Flow<String> = context.dataStore.data.map { it[SPREADSHEET_URL] ?: "" }
@@ -31,6 +38,13 @@ class PreferencesManager(private val context: Context) {
     val lastSyncTimeFlow: Flow<Long> = context.dataStore.data.map { it[LAST_SYNC_TIME] ?: 0L }
     val initialBalanceFlow: Flow<Double> = context.dataStore.data.map { it[INITIAL_BALANCE] ?: 0.0 }
     val isDarkThemeFlow: Flow<Boolean> = context.dataStore.data.map { it[IS_DARK_THEME] ?: false }
+
+    // OAuth2 Flows
+    val oauthClientIdFlow: Flow<String> = context.dataStore.data.map { it[OAUTH_CLIENT_ID] ?: "" }
+    val oauthClientSecretFlow: Flow<String> = context.dataStore.data.map { it[OAUTH_CLIENT_SECRET] ?: "" }
+    val oauthAccessTokenFlow: Flow<String> = context.dataStore.data.map { it[OAUTH_ACCESS_TOKEN] ?: "" }
+    val oauthRefreshTokenFlow: Flow<String> = context.dataStore.data.map { it[OAUTH_REFRESH_TOKEN] ?: "" }
+    val oauthTokenExpiryFlow: Flow<Long> = context.dataStore.data.map { it[OAUTH_TOKEN_EXPIRY] ?: 0L }
 
     suspend fun saveSpreadsheetUrl(url: String) {
         context.dataStore.edit { it[SPREADSHEET_URL] = url }
@@ -54,5 +68,30 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun saveDarkTheme(isDark: Boolean) {
         context.dataStore.edit { it[IS_DARK_THEME] = isDark }
+    }
+
+    suspend fun saveOAuthCredentials(clientId: String, clientSecret: String) {
+        context.dataStore.edit {
+            it[OAUTH_CLIENT_ID] = clientId
+            it[OAUTH_CLIENT_SECRET] = clientSecret
+        }
+    }
+
+    suspend fun saveOAuthTokens(accessToken: String, refreshToken: String, expiresIn: Long) {
+        context.dataStore.edit {
+            it[OAUTH_ACCESS_TOKEN] = accessToken
+            if (refreshToken.isNotEmpty()) {
+                it[OAUTH_REFRESH_TOKEN] = refreshToken
+            }
+            it[OAUTH_TOKEN_EXPIRY] = System.currentTimeMillis() + (expiresIn * 1000)
+        }
+    }
+
+    suspend fun clearOAuthTokens() {
+        context.dataStore.edit {
+            it.remove(OAUTH_ACCESS_TOKEN)
+            it.remove(OAUTH_REFRESH_TOKEN)
+            it.remove(OAUTH_TOKEN_EXPIRY)
+        }
     }
 }
